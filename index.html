@@ -68,12 +68,8 @@ body:not(.wide) .title1{left:var(--home-title-left,217px);top:var(--home-title-t
 .globe{left:0;top:0;width:1024px;height:1536px;clip-path:ellipse(335px 325px at 508px 548px);-webkit-clip-path:ellipse(335px 325px at 508px 548px)}
 .globe > *{position:absolute}
 .ball{left:0;top:0;will-change:transform}
-/* 吉祥物「酷客」:靜止時只露出頭(下半身用漸層遮罩隱藏),攪動時遮罩拉開、整隻跟著飛舞 */
-.mascot{left:0;top:0;will-change:transform;
-  -webkit-mask-image:linear-gradient(#000 0,#000 60%,transparent 74%);mask-image:linear-gradient(#000 0,#000 60%,transparent 74%);
-  -webkit-mask-size:100% 100%;mask-size:100% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
-  transition:-webkit-mask-size .5s ease,mask-size .5s ease}
-.globe.stir .mascot{-webkit-mask-size:100% 280%;mask-size:100% 280%}
+/* 吉祥物「酷客」:永遠完全不透明;靜止時排在雪球後面,下半身被雪球擋住,只露出頭 */
+.mascot{left:0;top:0;will-change:transform}
 .powder{left:0;top:0;width:1024px;height:1536px}
 .glass{clip-path:inset(0 0 41.40625% 0);-webkit-clip-path:inset(0 0 41.40625% 0)}
 .ballout{left:0;top:0;width:131px;height:131px;opacity:0;will-change:transform,opacity}
@@ -606,7 +602,8 @@ function drawBalls(){
     const sc = 1 + b.z*.16, fl = b.flip || 1;
     b.el.style.zIndex = i;
     b.el.style.transform = `translate(${b.x-b.size/2}px,${b.y-b.size/2}px) scale(${sc*fl},${sc}) rotate(${b.rot}deg)`;
-    b.el.style.opacity = b.mascot ? '1' : (.82 + (b.z+1)*.09).toFixed(2);
+    // 靜止時(z=0)全部不透明,避免吉祥物身體從雪球後面透出;攪動時只有往後飛的雪球稍微變暗,保留遠近感
+    b.el.style.opacity = b.mascot ? '1' : (1 - Math.max(0, -b.z) * .16).toFixed(2);
   });
 }
 function resetBalls(){ balls.forEach(b => { b.x=b.hx; b.y=b.hy; b.vx=b.vy=0; b.z=0; b.rot=b.r0||0; }); biasW = 1; $('globe').classList.remove('stir'); drawBalls(); }
