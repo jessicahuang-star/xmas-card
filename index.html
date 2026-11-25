@@ -703,6 +703,7 @@ function drawBurst(dt){
 /* ── 主迴圈 ── */
 let mode = 'idle', modeT = 0, modeStart = 0, last = performance.now(), T = 0;
 const WIND = reduce ? .9 : 2.4, SETTLE = .75;
+const rig = $('rig');
 function loop(now){
   const dt = Math.min(.05, (now-last)/1000); last = now; T += dt;
   modeT = (now - modeStart)/1000;
@@ -721,8 +722,10 @@ function loop(now){
         b.z = Math.sin(T*b.sp + b.ph) * k;
         b.rot += (b.vx*.08)*dt*10;
       }
+      // 機台輕晃:跟雪球同一個迴圈逐格計算(不用 Web Animations,避免 iPhone/LINE 取消動畫後圖層空白)
+      if (!reduce){ const w = Math.sin(modeT * 15) * k; rig.style.transform = `rotate(${(w*1.1).toFixed(3)}deg) translateX(${(w*4).toFixed(2)}px)`; }
       drawDust(dt, T, k);
-      if (modeT >= WIND){ mode='settle'; modeStart=now; modeT=0; balls.forEach(b => { const r0 = b.r0||0; b.sx=b.x; b.sy=b.y; b.sz=b.z; b.sr = r0 + (((b.rot - r0) % 360) + 540) % 360 - 180; }); }
+      if (modeT >= WIND){ rig.style.transform = ''; mode='settle'; modeStart=now; modeT=0; balls.forEach(b => { const r0 = b.r0||0; b.sx=b.x; b.sy=b.y; b.sz=b.z; b.sr = r0 + (((b.rot - r0) % 360) + 540) % 360 - 180; }); }
     } else {
       const p = Math.min(1, modeT/SETTLE), e = 1-Math.pow(1-p,3);
       snow.gust = 0;
@@ -771,13 +774,7 @@ async function makeWish(){
   mode = 'wind'; modeT = 0; modeStart = performance.now();
   $('globe').classList.add('stir'); biasW = .15;
   if (navigator.vibrate) try { navigator.vibrate(30); } catch(e){}
-  let shake = null;
-  if (!reduce) shake = $('rig').animate([
-    {transform:'rotate(0deg)'},{transform:'rotate(-1.1deg) translateX(-4px)'},{transform:'rotate(1.2deg) translateX(4px)'},
-    {transform:'rotate(-.8deg)'},{transform:'rotate(.9deg)'},{transform:'rotate(0deg)'}
-  ], { duration:420, iterations:Math.round(WIND/.42), easing:'ease-in-out' });
   await sleep((WIND + SETTLE*.8)*1000);
-  if (shake) shake.cancel();
   const anim = await rollOut();
   // 雪球散開
   $('ballout').style.opacity = 0; anim.cancel(); $('ballout').style.setProperty('--glow',0);
@@ -818,6 +815,14 @@ async function showResult(){
   if (vis) vis.focus({preventScroll:true});
 }
 
+/* 回首頁時強制首頁整層重畫:iPhone Safari / LINE(WebKit)在「隱藏→重新顯示」時,
+   偶爾不會重畫剛做過動畫、又有球形裁切的機台圖層,造成機台空白。趁畫面全白時做,看不出閃動。 */
+function repaintHome(){
+  const st = $('stage1');
+  st.style.display = 'none'; void st.offsetHeight; st.style.display = '';
+  layout();
+}
+
 async function replay(){
   sfx.stopMusic();
   await whiteIn(450);
@@ -825,7 +830,8 @@ async function replay(){
   $('s2').classList.remove('active','show');
   $('s1').classList.add('active');
   $('backdrop').style.backgroundImage = `url(${wide ? 'assets/bg-wide.jpg' : 'assets/bg-stage.jpg'})`;
-  resetBalls(); dust = []; mode = 'idle';
+  rig.style.transform = ''; resetBalls(); dust = []; mode = 'idle';
+  repaintHome();
   const btn = $('wish'); btn.disabled = false;
   choose();
   await whiteOut(600);
