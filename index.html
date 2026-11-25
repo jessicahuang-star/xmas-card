@@ -240,13 +240,15 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rand = (a, b) => a + Math.random() * (b - a);
 
-/* ── 音效:Web Audio 即時合成(無音檔、無版權問題) ──
-   wish(總長)  :八音盒〈We Wish You a Merry Christmas〉前兩句 + 風吹時的輕柔雪橇鈴
-   bell()      :雪球散開時的手搖鈴 + 往上飄的閃爍音
-   使用者第一次按 Make a Wish 才建立音訊(瀏覽器規定要有點擊才能出聲);右上角可靜音並記住 */
+/* ── 音效與配樂:Web Audio 即時合成(無音檔;曲目皆為無版權傳統聖誕歌) ──
+   wish(總長, 風吹秒數):八音盒〈We Wish You a Merry Christmas〉前兩句 + 風吹時的輕柔雪橇鈴
+   bell()              :雪球散開時的手搖鈴 + 往上飄的閃爍音
+   music(第幾張)       :結果頁配樂,每張一首,循環播放;stopMusic() 淡出
+   使用者第一次點擊才建立音訊(瀏覽器規定);右上角可靜音並記住;切到別的 App 時暫停 */
 const sfx = (() => {
   const VOL = 0.6;
   let ctx = null, master, bus, noise, on = true;
+  let song = null, pendingSong = null;
   try { on = localStorage.getItem('xmas-sound') !== 'off'; } catch(e){}
   function init(){
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -254,7 +256,6 @@ const sfx = (() => {
     if (!ctx){
       ctx = new AC();
       master = ctx.createGain(); master.gain.value = on ? VOL : 0; master.connect(ctx.destination);
-      // 柔和殘響(合成 2.6 秒衰減)
       const len = Math.floor(ctx.sampleRate * 2.6), ir = ctx.createBuffer(2, len, ctx.sampleRate);
       for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 3); }
       const conv = ctx.createConvolver(); conv.buffer = ir;
@@ -264,30 +265,133 @@ const sfx = (() => {
       noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random()*2-1;
     }
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state === 'suspended' && !document.hidden) ctx.resume();
     return true;
   }
-  function tone(f, t, dur, peak){
+  function tone(f, t, dur, peak, dest, type){
     const o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = 'sine'; o.frequency.value = f;
+    o.type = type || 'sine'; o.frequency.value = f;
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + 0.006);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05);
+    o.connect(g); g.connect(dest || bus); o.start(t); o.stop(t + dur + 0.05);
   }
-  function musicBox(f, t){ tone(f, t, 1.8, .15); tone(f*2, t, 1.0, .045); tone(f*3.01, t, .5, .02); tone(f*5.4, t, .1, .025); }
-  function jingle(t, amp){
+  function musicBox(f, t, dest, amp){
+    const a = amp || 1;
+    tone(f, t, 1.8, .15*a, dest); tone(f*2, t, 1.0, .045*a, dest); tone(f*3.01, t, .5, .02*a, dest); tone(f*5.4, t, .1, .025*a, dest);
+  }
+  function jingle(t, amp, dest){
     const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
     src.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = rand(5200, 8200); bp.Q.value = 5;
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
-    src.connect(bp); bp.connect(g); g.connect(bus); src.start(t, rand(0, .8), .12);
-    tone(rand(3800, 6400), t, .14, amp * .35);
+    src.connect(bp); bp.connect(g); g.connect(dest || bus); src.start(t, rand(0, .8), .12);
+    tone(rand(3800, 6400), t, .14, amp * .35, dest);
   }
+  // 柔和和弦鋪底(兩支微走音三角波 + 低通),低音一聲
+  function pad(freqs, t, dur, dest){
+    const lp = ctx.createBiquadFilter(), g = ctx.createGain();
+    lp.type = 'lowpass'; lp.frequency.value = 1100;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.022, t + .35);
+    g.gain.setValueAtTime(.022, t + Math.max(.4, dur - .3)); g.gain.linearRampToValueAtTime(0, t + dur + .25);
+    lp.connect(g); g.connect(dest);
+    for (const f of freqs) for (const det of [-5, 5]){
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f; o.detune.value = det;
+      o.connect(lp); o.start(t); o.stop(t + dur + .3);
+    }
+  }
+  const SEMI = { C:0, 'C#':1, Db:1, D:2, 'D#':3, Eb:3, E:4, F:5, 'F#':6, Gb:6, G:7, 'G#':8, Ab:8, A:9, 'A#':10, Bb:10, B:11 };
+  const hz = name => { const m = name.match(/^([A-G][#b]?)(\d)$/); return 440 * Math.pow(2, (SEMI[m[1]] + (+m[2] + 1) * 12 - 69) / 12); };
+  function chordHz(name){
+    const m = name.match(/^([A-G][#b]?)(m?)$/), root = SEMI[m[1]];
+    const midi = 48 + root;                      // 和弦放在 C3~B3 一帶
+    const iv = m[2] ? [0, 3, 7] : [0, 4, 7];
+    return { pad: iv.map(x => 440 * Math.pow(2, (midi + x + 12 - 69) / 12)), bass: 440 * Math.pow(2, (midi - 12 - 69) / 12) };
+  }
+  // 旋律 [音, 拍];和弦 [從第幾拍, 和弦, 拍數];beat = 每拍秒數;oct = 旋律升幾個八度(八音盒音域)
+  const SONGS = [
+    { name:'Silent Night', beat:.46, oct:1, mel:[
+      ['G4',1.5],['A4',.5],['G4',1],['E4',3],['G4',1.5],['A4',.5],['G4',1],['E4',3],
+      ['D5',2],['D5',1],['B4',3],['C5',2],['C5',1],['G4',3],
+      ['A4',2],['A4',1],['C5',1.5],['B4',.5],['A4',1],['G4',1.5],['A4',.5],['G4',1],['E4',3],
+      ['A4',2],['A4',1],['C5',1.5],['B4',.5],['A4',1],['G4',1.5],['A4',.5],['G4',1],['E4',3],
+      ['D5',2],['D5',1],['F5',1.5],['D5',.5],['B4',1],['C5',3],['E5',3],
+      ['C5',1.5],['G4',.5],['E4',1],['G4',1.5],['F4',.5],['D4',1],['C4',6]],
+      bar:3, chords:'C C C C G G C C F F C C F F C C G G C C C G C C' },
+    { name:'Deck the Halls', beat:.34, oct:1, mel:[
+      ['G4',1.5],['F4',.5],['E4',1],['D4',1],['C4',1],['D4',1],['E4',1],['C4',1],
+      ['D4',.5],['E4',.5],['F4',.5],['D4',.5],['E4',1.5],['D4',.5],['C4',1],['B3',1],['C4',2],
+      ['G4',1.5],['F4',.5],['E4',1],['D4',1],['C4',1],['D4',1],['E4',1],['C4',1],
+      ['D4',.5],['E4',.5],['F4',.5],['D4',.5],['E4',1.5],['D4',.5],['C4',1],['B3',1],['C4',2],
+      ['D4',1.5],['E4',.5],['F4',1],['D4',1],['E4',1.5],['F4',.5],['G4',1],['D4',1],
+      ['E4',.5],['F#4',.5],['G4',1],['A4',.5],['B4',.5],['C5',1],['B4',1],['A4',1],['G4',2],
+      ['G4',1.5],['F4',.5],['E4',1],['D4',1],['C4',1],['D4',1],['E4',1],['C4',1],
+      ['A4',.5],['A4',.5],['A4',.5],['A4',.5],['G4',1.5],['F4',.5],['E4',1],['D4',1],['C4',2]],
+      bar:4, chords:'C C G C C C G C G C D G C C F C' },
+    { name:'We Wish You a Merry Christmas', beat:.36, oct:1, lead:1, alt:true, mel:[
+      ['D4',1],['G4',1],['G4',.5],['A4',.5],['G4',.5],['F#4',.5],['E4',1],['E4',1],['E4',1],
+      ['A4',1],['A4',.5],['B4',.5],['A4',.5],['G4',.5],['F#4',1],['D4',1],['D4',1],
+      ['B4',1],['B4',.5],['C5',.5],['B4',.5],['A4',.5],['G4',1],['E4',1],['D4',.5],['D4',.5],
+      ['E4',1],['A4',1],['F#4',1],['G4',2]],
+      bar:3, chords:'G C Am D Em C D G' },
+    { name:'Jingle Bells', beat:.3, oct:1, bells:true, mel:[
+      ['B4',1],['B4',1],['B4',2],['B4',1],['B4',1],['B4',2],['B4',1],['D5',1],['G4',1.5],['A4',.5],['B4',4],
+      ['C5',1],['C5',1],['C5',1.5],['C5',.5],['C5',1],['B4',1],['B4',1],['B4',.5],['B4',.5],
+      ['B4',1],['A4',1],['A4',1],['B4',1],['A4',2],['D5',2],
+      ['B4',1],['B4',1],['B4',2],['B4',1],['B4',1],['B4',2],['B4',1],['D5',1],['G4',1.5],['A4',.5],['B4',4],
+      ['C5',1],['C5',1],['C5',1.5],['C5',.5],['C5',1],['B4',1],['B4',1],['B4',.5],['B4',.5],
+      ['D5',1],['D5',1],['C5',1],['A4',1],['G4',4]],
+      bar:4, chords:'G G G G C G A D G G G G C G D G' },
+    { name:'O Christmas Tree', beat:.45, oct:1, lead:1, mel:[
+      ['C4',1],
+      ['F4',.75],['F4',.25],['F4',1.5],['G4',.5],['A4',.75],['A4',.25],['A4',1.5],['A4',.5],['G4',.5],['A4',.5],['Bb4',1],['E4',1],['G4',1],['F4',1],['C4',1],
+      ['F4',.75],['F4',.25],['F4',1.5],['G4',.5],['A4',.75],['A4',.25],['A4',1.5],['A4',.5],['G4',.5],['A4',.5],['Bb4',1],['E4',1],['G4',1],['F4',1],['C5',1],
+      ['C5',.5],['A4',.5],['D5',1.5],['C5',.5],['C5',.5],['Bb4',.5],['Bb4',1.5],['Bb4',.5],['Bb4',.5],['G4',.5],['C5',1.5],['Bb4',.5],['Bb4',.5],['A4',.5],['A4',1],['C4',1],
+      ['F4',.75],['F4',.25],['F4',1.5],['G4',.5],['A4',.75],['A4',.25],['A4',1.5],['A4',.5],['G4',.5],['A4',.5],['Bb4',1],['E4',1],['G4',1],['F4',1]],
+      bar:3, chords:'F F C F F F C F F C C F F F C F' },
+  ];
+  function schedulePass(sg, t0){
+    const S = SONGS[sg.idx], b = S.beat, lead = S.lead || 0;
+    let t = t0, total = 0;
+    const oct = S.oct - (S.alt && sg.pass % 2 ? 1 : 0);   // 短曲每輪交替八度,避免太單調
+    sg.pass++;
+    for (const [n, d] of S.mel){ musicBox(hz(n) * Math.pow(2, oct), t, sg.out, .62); t += d*b; total += d; }
+    S.chords.split(' ').forEach((c, i) => {
+      const st = t0 + (lead + i*S.bar)*b, dur = S.bar*b, ch = chordHz(c);
+      pad(ch.pad, st, dur, sg.out);
+      tone(ch.bass, st, Math.min(2.4, dur + .3), .07, sg.out);
+    });
+    if (S.bells) for (let x = 0; x < total; x += 1) if (x % 2 === 1) jingle(t0 + x*b, .02, sg.out);
+    const next = t0 + total*b;
+    sg.timer = setTimeout(() => { if (song === sg) schedulePass(sg, next); }, Math.max(0, (next - ctx.currentTime - 1.5) * 1000));
+  }
+  function startSong(idx, delay){
+    stopMusic();
+    if (!init()) return;
+    const out = ctx.createGain(); out.gain.value = 1; out.connect(bus);
+    song = { idx, out, timer:0, pass:0 };
+    schedulePass(song, ctx.currentTime + (delay || 0.1));
+  }
+  function stopMusic(){
+    pendingSong = null;
+    if (!song || !ctx) { song = null; return; }
+    const sg = song; song = null;
+    clearTimeout(sg.timer);
+    sg.out.gain.setTargetAtTime(0, ctx.currentTime, .25);
+    setTimeout(() => sg.out.disconnect(), 1800);
+  }
+  // 預覽網址(?preview=)直接進結果頁時還沒有點擊:等第一次點擊再開始配樂
+  addEventListener('pointerdown', () => { if (pendingSong !== null){ const n = pendingSong; pendingSong = null; startSong(n, .1); } }, true);
+  // 切到別的 App / 分頁時暫停,回來再繼續
+  document.addEventListener('visibilitychange', () => {
+    if (!ctx) return;
+    if (document.hidden) ctx.suspend(); else ctx.resume();
+  });
   const NOTE = { D4:293.66, E4:329.63, 'F#4':369.99, G4:392, A4:440, B4:493.88 };
   const SONG = [['D4',1],['G4',1],['G4',.5],['A4',.5],['G4',.5],['F#4',.5],['E4',1],['E4',1],['E4',1],
                 ['A4',1],['A4',.5],['B4',.5],['A4',.5],['G4',.5],['F#4',1],['D4',1],['D4',1]];   // 共 13 拍
   return {
     wish(total, wind){
       if (!init()) return;
+      stopMusic();
       const t0 = ctx.currentTime + 0.05;
       const beat = Math.max(.22, Math.min(.4, (total - .35) / 13));
       let t = t0;
@@ -304,6 +408,12 @@ const sfx = (() => {
         .forEach(([r, a, d]) => tone(f*r, t, d, a));
       [1568,1760,2093,2349,2637,3136].forEach((ff, i) => tone(ff, t + .08 + i*.07, .8, .03));
     },
+    music(idx, delay){
+      if (!ctx){ pendingSong = idx; return; }   // 還沒有使用者點擊過
+      startSong(idx, delay);
+    },
+    stopMusic,
+    get songName(){ return song ? SONGS[song.idx].name : (pendingSong !== null ? 'pending:' + SONGS[pendingSong].name : null); },
     get on(){ return on; },
     toggle(){
       on = !on;
@@ -313,6 +423,7 @@ const sfx = (() => {
     },
   };
 })();
+window.__sfx = sfx;   // 檢查用
 
 /* ── 5 種結果:背景、祝福語、配色 ── */
 const RESULTS = [
@@ -329,7 +440,7 @@ const RESULTS = [
 ];
 // 每張圖木座中段的 y(畫布座標),Logo 壓在這裡;桌機用的寬版底圖
 const LOGO_Y = [1365, 1358, 1362, 1352, 1368];
-RESULTS.forEach((r, i) => { r.ly = LOGO_Y[i]; r.wide = r.img.replace('assets/', 'assets/bgc/').replace('.jpg', '-background.png'); r.globe = r.img.replace('.jpg', '-globe.png'); });
+RESULTS.forEach((r, i) => { r.ly = LOGO_Y[i]; r.wide = r.img.replace('assets/', 'assets/bgc/').replace('.jpg', '-background.webp'); r.globe = r.img.replace('.jpg', '-globe.webp'); });
 // 透明 PNG 的有效球體範圍，排除四周透明留白；原地面位置用來保持落地高度。
 const RESULT_GLOBES = [
   { x:690, ground:693, width:1302, height:1208, bounds:[154,69,1135,1136] },
@@ -683,11 +794,13 @@ async function showResult(){
   whiteOut(reduce ? 400 : 1000);
   await sleep(250);
   s2.classList.add('show');
+  sfx.music(pick, .6);   // 結果頁配樂:每張一首,鈴聲餘音後接上
   const vis = [...document.querySelectorAll('#s2 .replay')].find(b => b.offsetParent);
   if (vis) vis.focus({preventScroll:true});
 }
 
 async function replay(){
+  sfx.stopMusic();
   await whiteIn(450);
   document.body.classList.remove('result-view');
   $('s2').classList.remove('active','show');

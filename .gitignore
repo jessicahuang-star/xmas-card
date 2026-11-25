@@ -6,3 +6,10 @@
 # 內部規格與素材處理腳本只留在本機,不公開
 spec/
 tools/
+
+# 桌機結果頁 PNG 原檔(網頁改用同尺寸 WebP)、未使用的工作檔
+assets/result-*-globe.png
+assets/bgc/*.png
+assets/bgc/*.txt
+assets/result-*-extended.jpg
+assets/result-cutouts-*
