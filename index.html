@@ -68,6 +68,12 @@ body:not(.wide) .title1{left:var(--home-title-left,217px);top:var(--home-title-t
 .globe{left:0;top:0;width:1024px;height:1536px;clip-path:ellipse(335px 325px at 508px 548px);-webkit-clip-path:ellipse(335px 325px at 508px 548px)}
 .globe > *{position:absolute}
 .ball{left:0;top:0;will-change:transform}
+/* 吉祥物「酷客」:靜止時只露出頭(下半身用漸層遮罩隱藏),攪動時遮罩拉開、整隻跟著飛舞 */
+.mascot{left:0;top:0;will-change:transform;
+  -webkit-mask-image:linear-gradient(#000 0,#000 60%,transparent 74%);mask-image:linear-gradient(#000 0,#000 60%,transparent 74%);
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  transition:-webkit-mask-size .5s ease,mask-size .5s ease}
+.globe.stir .mascot{-webkit-mask-size:100% 280%;mask-size:100% 280%}
 .powder{left:0;top:0;width:1024px;height:1536px}
 .glass{clip-path:inset(0 0 41.40625% 0);-webkit-clip-path:inset(0 0 41.40625% 0)}
 .ballout{left:0;top:0;width:131px;height:131px;opacity:0;will-change:transform,opacity}
@@ -192,7 +198,7 @@ body.wide .replay{font-size:clamp(13px,min(1vw,2.2vh),17px)}
     <div class="home-ui" id="homeui">
       <img class="home-logo" src="assets/logo-white.webp" alt="CoolBe 酷必資訊">
     <img class="title1" src="assets/title-gold.webp" alt="Merry Christmas & Happy New Year">
-    <button class="wish" id="wish" type="button" aria-label="Make a Wish，許下新年願望">
+    <button class="wish" id="wish" type="button" autocomplete="off" aria-label="Make a Wish，許下新年願望">
       <img src="assets/btn-wish.webp" alt=""><span class="shine"></span>
     </button>
     </div>
@@ -219,7 +225,7 @@ body.wide .replay{font-size:clamp(13px,min(1vw,2.2vh),17px)}
     </div>
     <div class="r-bottom reveal d3">
       <p class="r-sign">酷必資訊 向您獻上最誠摯的祝福</p>
-      <button class="replay reveal d4" type="button">↻ 再許一次願</button>
+      <button class="replay reveal d4" type="button" autocomplete="off">↻ 再許一次願</button>
     </div>
   </div>
 </section>
@@ -538,6 +544,8 @@ function setWish(){
 
 let wide = null;
 function layout(){
+  // 載入當下視窗可能還是 0(LINE 開啟動畫中、App 面板收起):此時排版會把機台縮成 0,改成下一格再算
+  if (innerWidth < 40 || innerHeight < 40){ requestAnimationFrame(layout); return; }
   // 橫向(桌機、平板橫放、手機橫拿)→ 寬版背景 + 結果頁左右版型
   const w = innerWidth / innerHeight >= 1.1;
   if (w !== wide){
@@ -580,16 +588,28 @@ const balls = HOME.map(([x,y,d]) => {
   $('globe').insertBefore(el, $('powder'));
   return { el, hx:x, hy:y, d, size, x, y, vx:0, vy:0, z:0, ph:rand(0,6.28), sp:rand(2.2,4.2), rot:0, vr:0 };
 });
+// 吉祥物「酷客」×3:靜止時從後排雪球縫隙探頭,攪動時跟著雪球一起飛舞、旋轉(加入同一套物理)
+// [x, y, 靜止角度, 1=原方向 / -1=左右鏡像]
+const MASCOTS = [[383, 626, -10, 1], [532, 618, 6, -1], [656, 630, 12, 1]];
+MASCOTS.forEach(([x, y, r0, flip]) => {
+  const el = document.createElement('img');
+  el.src = 'assets/mascot.webp'; el.className = 'mascot'; el.alt = '';
+  const size = 150; el.style.width = size + 'px'; el.style.height = Math.round(size * 298 / 300) + 'px';
+  $('globe').insertBefore(el, $('powder'));
+  balls.push({ el, hx:x, hy:y, d:118, size, x, y, vx:0, vy:0, z:0, ph:rand(0,6.28), sp:rand(2.2,4.2), rot:r0, r0, flip, bias:-.6, vr:0, mascot:true });
+});
+let biasW = 1;   // 靜止時吉祥物排在雪球後面(才會只露頭);攪動時與雪球前後交錯
 function drawBalls(){
-  const order = balls.slice().sort((a,b) => a.z - b.z);
+  const key = b => b.z + (b.bias || 0) * biasW;
+  const order = balls.slice().sort((a,b) => key(a) - key(b));
   order.forEach((b,i) => {
-    const sc = 1 + b.z*.16;
+    const sc = 1 + b.z*.16, fl = b.flip || 1;
     b.el.style.zIndex = i;
-    b.el.style.transform = `translate(${b.x-b.size/2}px,${b.y-b.size/2}px) scale(${sc}) rotate(${b.rot}deg)`;
-    b.el.style.opacity = (.82 + (b.z+1)*.09).toFixed(2);
+    b.el.style.transform = `translate(${b.x-b.size/2}px,${b.y-b.size/2}px) scale(${sc*fl},${sc}) rotate(${b.rot}deg)`;
+    b.el.style.opacity = b.mascot ? '1' : (.82 + (b.z+1)*.09).toFixed(2);
   });
 }
-function resetBalls(){ balls.forEach(b => { b.x=b.hx; b.y=b.hy; b.vx=b.vy=0; b.z=0; b.rot=0; }); drawBalls(); }
+function resetBalls(){ balls.forEach(b => { b.x=b.hx; b.y=b.hy; b.vx=b.vy=0; b.z=0; b.rot=b.r0||0; }); biasW = 1; $('globe').classList.remove('stir'); drawBalls(); }
 resetBalls();
 
 /* ── 球內雪粉(半解析度畫布) ── */
@@ -705,17 +725,18 @@ function loop(now){
         b.rot += (b.vx*.08)*dt*10;
       }
       drawDust(dt, T, k);
-      if (modeT >= WIND){ mode='settle'; modeStart=now; modeT=0; balls.forEach(b => { b.sx=b.x; b.sy=b.y; b.sz=b.z; b.sr=b.rot; }); }
+      if (modeT >= WIND){ mode='settle'; modeStart=now; modeT=0; balls.forEach(b => { const r0 = b.r0||0; b.sx=b.x; b.sy=b.y; b.sz=b.z; b.sr = r0 + (((b.rot - r0) % 360) + 540) % 360 - 180; }); }
     } else {
       const p = Math.min(1, modeT/SETTLE), e = 1-Math.pow(1-p,3);
       snow.gust = 0;
       for (const b of balls){
         b.x = b.sx + (b.hx-b.sx)*e;
         b.y = b.sy + (b.hy-b.sy)*e + Math.sin(p*Math.PI)*-18*(1-p);
-        b.z = b.sz*(1-e); b.rot = b.sr*(1-e);
+        b.z = b.sz*(1-e); b.rot = (b.r0||0) + (b.sr - (b.r0||0))*(1-e);
       }
       drawDust(dt, T, 0);
-      if (p >= 1) mode = 'idle';
+      biasW = .15 + .85*e;
+      if (p >= 1){ mode = 'idle'; $('globe').classList.remove('stir'); }
     }
     drawBalls();
   } else if (dust.length) drawDust(dt, T, 0);
@@ -751,6 +772,7 @@ async function makeWish(){
   sfx.wish(WIND + SETTLE*.8 + (reduce ? 1.1 : 2.3), WIND);   // 要在點擊當下(第一個 await 之前)啟動音訊
   const btn = $('wish'); btn.disabled = true;
   mode = 'wind'; modeT = 0; modeStart = performance.now();
+  $('globe').classList.add('stir'); biasW = .15;
   if (navigator.vibrate) try { navigator.vibrate(30); } catch(e){}
   let shake = null;
   if (!reduce) shake = $('rig').animate([
@@ -817,6 +839,25 @@ async function replay(){
 async function boot(){
   layout();
   addEventListener('resize', layout);
+  // 有些 App 內建瀏覽器在視窗就緒後不一定送 resize:多聽幾個來源,統一排到下一格重排
+  let relayoutQueued = false;
+  const relayout = () => { if (relayoutQueued) return; relayoutQueued = true; requestAnimationFrame(() => { relayoutQueued = false; layout(); }); };
+  addEventListener('orientationchange', relayout);
+  addEventListener('pageshow', relayout);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) relayout(); });
+  if (window.visualViewport) visualViewport.addEventListener('resize', relayout);
+  if (window.ResizeObserver) new ResizeObserver(relayout).observe(document.documentElement);
+  // 防護2:圖片下載失敗(網路不穩)自動重試 3 次,避免機台某一層一直空白
+  document.querySelectorAll('img').forEach(img => {
+    const retry = () => {
+      const n = +(img.dataset.retry || 0), src = img.getAttribute('src');
+      if (!src || n >= 3) return;
+      img.dataset.retry = n + 1;
+      setTimeout(() => { img.src = src.split('?')[0] + '?retry=' + (n + 1); }, 600 * (n + 1));
+    };
+    img.addEventListener('error', retry);
+    if (img.complete && img.getAttribute('src') && !img.naturalWidth) retry();   // 在程式執行前就已失敗的
+  });
   const imgs = [...document.querySelectorAll('#s1 img')];
   await Promise.race([
     Promise.all(imgs.map(i => i.complete ? Promise.resolve() : new Promise(r => { i.onload = i.onerror = r; }))),
@@ -829,6 +870,7 @@ async function boot(){
     document.fonts.ready.then(() => setWish());
     document.fonts.addEventListener('loadingdone', () => setWish());
   }
+  $('wish').disabled = false;   // 防護3:確保按鈕不沿用上次的停用狀態
   $('wish').addEventListener('click', makeWish);
   document.querySelectorAll('.replay').forEach(b => b.addEventListener('click', replay));
   const sb = $('sound');
@@ -840,6 +882,8 @@ async function boot(){
   requestAnimationFrame(t => { last = t; requestAnimationFrame(loop); });
 }
 boot();
+// 防護3:從「上一頁」或背景還原時,瀏覽器可能直接拿出動畫半途的舊畫面 → 重新載入成乾淨的首頁
+addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
 })();
 </script>
 </body>
