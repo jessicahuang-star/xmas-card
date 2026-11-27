@@ -267,8 +267,37 @@ const sfx = (() => {
       noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random()*2-1;
     }
-    if (ctx.state === 'suspended' && !document.hidden) ctx.resume();
+    unlock();
     return true;
+  }
+  /* iPhone / LINE 出聲三件事(都要在使用者點擊當下執行):
+     ① 改成「媒體播放」模式,靜音開關開著也能出聲(iOS 16.4+ 用 audioSession;舊版靠一段播放中的無聲音檔)
+     ② 真的播一小段無聲音訊,才算解鎖
+     ③ 狀態不是 running(暫停或被電話等「中斷」)就恢復 */
+  let silentTag = null;
+  function silentWavURL(){
+    const n = 4000, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+    const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+    w(36, 'data'); v.setUint32(40, n, true);
+    for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);   // 8-bit 無聲
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+  function unlock(){
+    if (!ctx || document.hidden) return;
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
+    if (on){
+      if (!silentTag){
+        silentTag = document.createElement('audio');
+        silentTag.setAttribute('playsinline', ''); silentTag.setAttribute('x-webkit-airplay', 'deny');
+        silentTag.preload = 'auto'; silentTag.loop = true; silentTag.src = silentWavURL();
+      }
+      if (silentTag.paused){ const p = silentTag.play(); if (p && p.catch) p.catch(() => {}); }
+    }
+    if (ctx.state !== 'running'){ const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); }
+    try { const b = ctx.createBuffer(1, 1, 22050), src = ctx.createBufferSource(); src.buffer = b; src.connect(ctx.destination); src.start(0); } catch(e){}
   }
   function tone(f, t, dur, peak, dest, type){
     const o = ctx.createOscillator(), g = ctx.createGain();
@@ -382,10 +411,13 @@ const sfx = (() => {
   }
   // 預覽網址(?preview=)直接進結果頁時還沒有點擊:等第一次點擊再開始配樂
   addEventListener('pointerdown', () => { if (pendingSong !== null){ const n = pendingSong; pendingSong = null; startSong(n, .1); } }, true);
+  // 被電話、Siri、切 App 中斷後:使用者下一次碰畫面就恢復聲音
+  ['touchend', 'pointerdown', 'click'].forEach(ev => addEventListener(ev, () => { if (ctx && on) unlock(); }, true));
   // 切到別的 App / 分頁時暫停,回來再繼續
   document.addEventListener('visibilitychange', () => {
     if (!ctx) return;
-    if (document.hidden) ctx.suspend(); else ctx.resume();
+    if (document.hidden){ ctx.suspend(); if (silentTag) silentTag.pause(); }
+    else unlock();
   });
   const NOTE = { D4:293.66, E4:329.63, 'F#4':369.99, G4:392, A4:440, B4:493.88 };
   const SONG = [['D4',1],['G4',1],['G4',.5],['A4',.5],['G4',.5],['F#4',.5],['E4',1],['E4',1],['E4',1],
@@ -421,6 +453,8 @@ const sfx = (() => {
       on = !on;
       try { localStorage.setItem('xmas-sound', on ? 'on' : 'off'); } catch(e){}
       if (ctx) master.gain.setTargetAtTime(on ? VOL : 0, ctx.currentTime, .05);
+      if (!on && silentTag) silentTag.pause();   // 關掉音效就釋放媒體播放,不佔用手機其他 App 的音樂
+      else if (on && ctx) unlock();
       return on;
     },
   };
